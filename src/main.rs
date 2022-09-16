@@ -1,4 +1,4 @@
-use std::{time::Instant, collections::HashMap, hash::Hash};
+use std::{time::Instant, collections::HashMap, hash::Hash, ops::{BitAnd, Not}};
 
 #[derive(Debug, Clone)]
 enum Token {
@@ -284,29 +284,147 @@ fn parse(code: &str) -> Vec<Token> {
     lex_final(&lex2(&lex(&tokenize(&code))))
 }
 
+fn get_first_output(out: &HashMap<String, u8>) -> u8 {
+    *out.get(out.keys().nth(0).unwrap()).unwrap_or(&0)
+}
+
 trait Executable {
-    fn execute(&self, code: Vec<Token>, inputs: &HashMap<String, u8>);
-    fn eval(&self, code: Vec<Token>, inputs: &HashMap<String, u8>) -> u8;
+    fn eval(&self, code: Vec<Token>, inputs: &HashMap<String, u8>) -> HashMap<String, u8>;
 }
 
 struct ChipEvaluator {
     chips: HashMap<String, Vec<Token>>
 }
 
-impl Executable for ChipEvaluator {
-    fn execute(&self, code: Vec<Token>, inputs: &HashMap<String, u8>) {
-        todo!()
+impl ChipEvaluator {
+    fn new() -> Self {
+        Self {chips: HashMap::new()}
     }
 
-    fn eval(&self, code: Vec<Token>, inputs: &HashMap<String, u8>) -> u8 {
-        todo!()
+    fn load_chip(&mut self, chip_name: &str, code: &Vec<Token>)  {
+        self.chips.insert(chip_name.to_string(), code.clone());
+    }
+}
+
+fn NAND(inputs: &HashMap<String, u8>) ->  HashMap<String,u8> {
+    let mut output: HashMap<String,u8> = HashMap::new();
+    let result = !(*inputs.get("a").unwrap_or(&0) & *inputs.get("b").unwrap_or(&0));
+    output.insert(String::from("out"), result);
+    output
+}
+
+impl Executable for ChipEvaluator {
+    fn eval(&self, code: Vec<Token>, inputs: &HashMap<String, u8>) -> HashMap<String, u8> {
+        let mut output = HashMap::<String, u8>::new();
+        
+        let mut token_iter = code.iter();
+        let mut current_token = token_iter.next();
+        let mut current_out_name: String = String::new();
+        while !current_token.is_none() {
+            // Handle case of outputting
+            match current_token.unwrap()  {
+                Token::Chip(_) => {},
+                Token::ChipIO(_, _) => {},
+                Token::Input(_) => todo!(),
+                Token::IO(_, _) => todo!(),
+                Token::Output(out) => {current_out_name = out.clone();},
+                Token::True => {output.insert(String::from("OUT"), 1 as u8);},
+                Token::False => {output.insert(String::from("OUT"), 0 as u8);},
+                Token::Assign => {},
+                Token::LParen => {},
+                Token::RParen => {},
+                Token::Comma => {},
+                Token::Expression(e_codes) => {
+                    let mut ec_iter = e_codes.iter();
+                    let e_chip =  ec_iter.next().unwrap();
+                    let mut e_inputs = HashMap::<String,u8>::new();
+                    let mut current_input_param = 'a' as u8;
+                    for input_token in ec_iter {
+                        // Handle IO
+                        if let Token::IO(x, y) = input_token {
+                            e_inputs.insert(x.clone(), *inputs.get(y).unwrap_or(&0));
+                        }
+                        // Handle expressions as inputs to current expression
+                        if let Token::Expression(i_toks)   = input_token {
+                            e_inputs.insert((current_input_param as char).to_string(), get_first_output(&self.eval(i_toks.to_vec(), &inputs)));
+                        }
+
+                        current_input_param += 1;
+                    }
+
+                    // Handle normal CHIPs
+                    if let Token::Chip(chip_name) = e_chip {
+                        // Handle NAND CHIP
+                        if chip_name == "NAND" {
+                            let e_result = get_first_output(&NAND(&e_inputs));
+                            if current_out_name.len() > 0 {
+                                output.insert(current_out_name.clone(), e_result);
+                                current_out_name.clear();
+                            }
+                            else  {
+                                output.insert(String::from("out"), e_result);
+                            }
+                        }
+                        // Handle other chips
+                        else {
+                            let chip_instructions = self.chips.get(chip_name).unwrap();
+                            let e_result =  get_first_output(&self.eval(chip_instructions.to_vec(), &e_inputs));
+                            if current_out_name.len() > 0 {
+                                output.insert(current_out_name.clone(), e_result);
+                                current_out_name.clear();
+                            }
+                            else  {
+                                output.insert(String::from("out"), e_result);
+                            }
+                        }
+                    }
+
+                    // Handle CHIPIO chips
+                    else if let Token::ChipIO(chip_name, chip_out) = e_chip {
+                        // Handle NAND CHIP
+                        if chip_name == "NAND" {
+                            let e_result = *NAND(&e_inputs).get(chip_out).unwrap_or(&0);
+                            if current_out_name.len() > 0 {
+                                output.insert(current_out_name.clone(), e_result);
+                                current_out_name.clear();
+                            }
+                            else  {
+                                output.insert(String::from("out"), e_result);
+                            }
+                        }
+                        // Handle other chips
+                        else {
+                            let chip_instructions = self.chips.get(chip_name).unwrap();
+                            let e_result =  *self.eval(chip_instructions.to_vec(), &e_inputs).get(chip_out).unwrap();
+                            if current_out_name.len() > 0 {
+                                output.insert(current_out_name.clone(), e_result);
+                                current_out_name.clear();
+                            }
+                            else  {
+                                output.insert(String::from("out"), e_result);
+                            }
+                        }
+                    }
+                },
+            }
+
+
+            current_token = token_iter.next();
+        }
+
+        output
     }
 }
 
 
 fn main() {
     // println!("{:#?}", lex2(&lex(&tokenize("// This is a comment\nOUT1 = NAND(a, b)\nXOR=AND(OR(A,B), NAND(A,B))"))));
-    println!("{:?}", parse("OUT = NAND.out1(a: a, OR(b: b,c: c))\nOUT2=XOR(a: x,b: y)"));
+    // println!("{:?}", parse("OUT = NAND.out1(a: a, OR(b: b,c: c))\nOUT2=XOR(a: x,b: y)"));
+    let cpu = ChipEvaluator::new();
+    let mut inputs = HashMap::<String, u8>::new();
+    inputs.insert(String::from("a"), 0b11111111);
+    inputs.insert(String::from("b"), 0b01010101);
+    println!("Result of NAND on 1 and 2: {:#08b}", get_first_output(&cpu.eval(parse("OUT = NAND(a: a, b: b)"), &inputs)));
 }
 
 /*
